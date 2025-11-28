@@ -17,7 +17,9 @@ A comprehensive weather dashboard that demonstrates integration of Python, REST 
    ```bash
    pip install -r requirements.txt
 
-
+Create a Weather Dashboard. Use a weather API (e.g., OpenWeatherMap) or Create dummy data with ChatGPT. 
+Store historical data in a SQL DB. 
+Use Pandas for data manipulation. Create visualizations with Matplotlib. Build a User web interface.
 
 # Create virtual environment
 python3 -m venv weather_env

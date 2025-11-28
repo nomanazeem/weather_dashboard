@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", message=".*ScriptRunContext.*")
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -5,7 +8,8 @@ import matplotlib.dates as mdates
 from datetime import datetime, timedelta
 import database
 import weather_api
-import numpy as np  # Add this import
+import numpy as np
+import random
 
 # Configure the page
 st.set_page_config(
@@ -43,29 +47,42 @@ st.sidebar.markdown("---")
 # Database operations
 st.sidebar.subheader("Database Operations")
 if st.sidebar.button("🗃️ Generate Sample Data"):
-    with st.spinner("Generating sample data... This may take a few seconds."):
-        db.generate_sample_data(days=30, records_per_day=3)
-    st.sidebar.success("Sample data generated successfully!")
+    try:
+        with st.spinner("Generating sample data... This may take a few seconds."):
+            db.generate_sample_data(days=30, records_per_day=3)
+        st.sidebar.success("Sample data generated successfully!")
+    except Exception as e:
+        st.sidebar.error(f"Error generating sample data: {e}")
 
 if st.sidebar.button("🧹 Clean Old Data"):
-    deleted_count = db.delete_old_data(days_old=60)
-    st.sidebar.success(f"Deleted {deleted_count} old records")
+    try:
+        deleted_count = db.delete_old_data(days_old=60)
+        st.sidebar.success(f"Deleted {deleted_count} old records")
+    except Exception as e:
+        st.sidebar.error(f"Error cleaning old data: {e}")
 
 # Database statistics
-db_stats = db.get_database_stats()
-if db_stats:
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Database Stats")
-    st.sidebar.write(f"Total Records: {db_stats['total_records']}")
-    st.sidebar.write(f"Cities: {db_stats['total_cities']}")
+try:
+    db_stats = db.get_database_stats()
+    if db_stats:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("Database Stats")
+        st.sidebar.write(f"Total Records: {db_stats['total_records']}")
+        st.sidebar.write(f"Cities: {db_stats['total_cities']}")
+except Exception as e:
+    st.sidebar.error(f"Error getting database stats: {e}")
 
 # City selection
-cities = db.get_all_cities()
-if not cities:
-    st.error("❌ No weather data available. Please generate sample data first.")
-    st.stop()
+try:
+    cities = db.get_all_cities()
+    if not cities:
+        st.error("❌ No weather data available. Please generate sample data first.")
+        st.stop()
 
-selected_city = st.sidebar.selectbox("📍 Select City", cities)
+    selected_city = st.sidebar.selectbox("📍 Select City", cities)
+except Exception as e:
+    st.error(f"Error loading cities: {e}")
+    st.stop()
 
 # Date range selection
 days = st.sidebar.slider("📅 Historical Data Days", 1, 90, 7)
@@ -137,130 +154,169 @@ try:
     st.subheader(f"{emoji} Current Conditions: {current_weather['description']}")
 
     # Store current weather in database
-    db.insert_weather_data(
-        current_weather['city'],
-        current_weather['temperature'],
-        current_weather['humidity'],
-        current_weather['pressure'],
-        current_weather['wind_speed'],
-        current_weather['description']
-    )
+    try:
+        db.insert_weather_data(
+            current_weather['city'],
+            current_weather['temperature'],
+            current_weather['humidity'],
+            current_weather['pressure'],
+            current_weather['wind_speed'],
+            current_weather['description']
+        )
+    except Exception as e:
+        st.warning(f"Could not save to database: {e}")
 
 except Exception as e:
     st.error(f"Error fetching current weather: {e}")
 
 # Get historical data
-historical_data = db.get_historical_data(selected_city, days)
+try:
+    historical_data = db.get_historical_data(selected_city, days)
 
-if not historical_data.empty:
-    # Convert timestamp to datetime
-    historical_data['timestamp'] = pd.to_datetime(historical_data['timestamp'])
+    if not historical_data.empty:
+        # Fix timestamp parsing - handle both with and without microseconds
+        def safe_parse_timestamp(ts):
+            if isinstance(ts, str):
+                # Try parsing with microseconds first, then without
+                try:
+                    return pd.to_datetime(ts, format='%Y-%m-%d %H:%M:%S.%f')
+                except ValueError:
+                    try:
+                        return pd.to_datetime(ts, format='%Y-%m-%d %H:%M:%S')
+                    except ValueError:
+                        # Fallback to pandas automatic parsing
+                        return pd.to_datetime(ts)
+            else:
+                return pd.to_datetime(ts)
 
-    # Create visualizations
-    st.subheader(f"📈 Historical Data - Last {days} Days")
+        historical_data['timestamp'] = historical_data['timestamp'].apply(safe_parse_timestamp)
 
-    # Create multiple tabs for different visualizations
-    tab1, tab2, tab3 = st.tabs(["📊 Temperature Analysis", "🌧️ Weather Patterns", "📋 Raw Data"])
+        # Create visualizations
+        st.subheader(f"📈 Historical Data - Last {days} Days")
 
-    with tab1:
-        # Temperature chart with trend line
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+        # Create multiple tabs for different visualizations
+        tab1, tab2, tab3 = st.tabs(["📊 Temperature Analysis", "🌧️ Weather Patterns", "📋 Raw Data"])
 
-        # Temperature plot
-        ax1.plot(historical_data['timestamp'], historical_data['temperature'],
-                 marker='o', linewidth=2, color='red', alpha=0.7, label='Temperature')
+        with tab1:
+            # Temperature chart with trend line
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
 
-        # Add trend line (only if we have enough data points)
-        if len(historical_data) > 1:
+            # Temperature plot
+            ax1.plot(historical_data['timestamp'], historical_data['temperature'],
+                     marker='o', linewidth=2, color='red', alpha=0.7, label='Temperature')
+
+            # Add trend line (only if we have enough data points)
+            if len(historical_data) > 1:
+                try:
+                    z = np.polyfit(range(len(historical_data)), historical_data['temperature'], 1)
+                    p = np.poly1d(z)
+                    ax1.plot(historical_data['timestamp'], p(range(len(historical_data))),
+                            '--', color='darkred', linewidth=1, label='Trend')
+                except Exception as e:
+                    print(f"Could not create trend line: {e}")
+
+            ax1.set_title(f'Temperature Trend - {selected_city}')
+            ax1.set_ylabel('Temperature (°C)')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+
+            # Humidity and Pressure subplot
+            ax2b = ax2.twinx()
+            ax2.plot(historical_data['timestamp'], historical_data['humidity'],
+                    marker='s', linewidth=2, color='blue', alpha=0.7, label='Humidity')
+            ax2b.plot(historical_data['timestamp'], historical_data['pressure'],
+                     marker='^', linewidth=2, color='green', alpha=0.7, label='Pressure')
+
+            ax2.set_xlabel('Date')
+            ax2.set_ylabel('Humidity (%)', color='blue')
+            ax2b.set_ylabel('Pressure (hPa)', color='green')
+            ax2.legend(loc='upper left')
+            ax2b.legend(loc='upper right')
+            ax2.grid(True, alpha=0.3)
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+
+            plt.tight_layout()
+            st.pyplot(fig)
+
+        with tab2:
+            # Weather patterns analysis
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # Weather condition distribution
+                weather_counts = historical_data['description'].value_counts()
+                if not weather_counts.empty:
+                    fig2, ax2 = plt.subplots(figsize=(8, 6))
+                    weather_counts.plot(kind='pie', autopct='%1.1f%%', ax=ax2)
+                    ax2.set_title('Weather Condition Distribution')
+                    ax2.set_ylabel('')  # Remove default ylabel
+                    st.pyplot(fig2)
+                else:
+                    st.info("No weather condition data available")
+
+            with col2:
+                # Wind speed distribution
+                if 'wind_speed' in historical_data.columns and not historical_data['wind_speed'].empty:
+                    fig3, ax3 = plt.subplots(figsize=(8, 6))
+                    ax3.hist(historical_data['wind_speed'], bins=10, alpha=0.7, color='orange')
+                    ax3.set_title('Wind Speed Distribution')
+                    ax3.set_xlabel('Wind Speed (m/s)')
+                    ax3.set_ylabel('Frequency')
+                    ax3.grid(True, alpha=0.3)
+                    st.pyplot(fig3)
+                else:
+                    st.info("No wind speed data available")
+
+        with tab3:
+            # Statistics
             try:
-                z = np.polyfit(range(len(historical_data)), historical_data['temperature'], 1)
-                p = np.poly1d(z)
-                ax1.plot(historical_data['timestamp'], p(range(len(historical_data))),
-                        '--', color='darkred', linewidth=1, label='Trend')
+                city_stats = db.get_city_statistics(selected_city)
+                if city_stats:
+                    st.subheader("📊 City Statistics")
+                    cols = st.columns(4)
+                    stats_to_show = [
+                        ('avg_temperature', '🌡️ Avg Temp', '°C'),
+                        ('max_temperature', '🔥 Max Temp', '°C'),
+                        ('min_temperature', '❄️ Min Temp', '°C'),
+                        ('avg_humidity', '💧 Avg Humidity', '%')
+                    ]
+
+                    for (stat_key, stat_label, unit), col in zip(stats_to_show, cols):
+                        with col:
+                            value = city_stats.get(stat_key, 0)
+                            if isinstance(value, (int, float)):
+                                st.metric(stat_label, f"{value:.1f}{unit}")
+                            else:
+                                st.metric(stat_label, f"{value}{unit}")
             except Exception as e:
-                print(f"Could not create trend line: {e}")
+                st.error(f"Error loading statistics: {e}")
 
-        ax1.set_title(f'Temperature Trend - {selected_city}')
-        ax1.set_ylabel('Temperature (°C)')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            # Raw data table
+            st.subheader("📋 Raw Data")
+            display_data = historical_data[['timestamp', 'temperature', 'humidity',
+                                          'pressure', 'wind_speed', 'description']].copy()
+            display_data['timestamp'] = display_data['timestamp'].dt.strftime('%Y-%m-%d %H:%M')
+            st.dataframe(display_data, use_container_width=True)
 
-        # Humidity and Pressure subplot
-        ax2b = ax2.twinx()
-        ax2.plot(historical_data['timestamp'], historical_data['humidity'],
-                marker='s', linewidth=2, color='blue', alpha=0.7, label='Humidity')
-        ax2b.plot(historical_data['timestamp'], historical_data['pressure'],
-                 marker='^', linewidth=2, color='green', alpha=0.7, label='Pressure')
+            # Download data
+            csv = historical_data.to_csv(index=False)
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name=f"weather_data_{selected_city}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
 
-        ax2.set_xlabel('Date')
-        ax2.set_ylabel('Humidity (%)', color='blue')
-        ax2b.set_ylabel('Pressure (hPa)', color='green')
-        ax2.legend(loc='upper left')
-        ax2b.legend(loc='upper right')
-        ax2.grid(True, alpha=0.3)
-        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    else:
+        st.info("ℹ️ No historical data available for the selected period.")
 
-        plt.tight_layout()
-        st.pyplot(fig)
-
-    with tab2:
-        # Weather patterns analysis
-        col1, col2 = st.columns(2)
-
-        with col1:
-            # Weather condition distribution
-            weather_counts = historical_data['description'].value_counts()
-            fig2, ax2 = plt.subplots(figsize=(8, 6))
-            weather_counts.plot(kind='pie', autopct='%1.1f%%', ax=ax2)
-            ax2.set_title('Weather Condition Distribution')
-            st.pyplot(fig2)
-
-        with col2:
-            # Wind speed distribution
-            fig3, ax3 = plt.subplots(figsize=(8, 6))
-            ax3.hist(historical_data['wind_speed'], bins=10, alpha=0.7, color='orange')
-            ax3.set_title('Wind Speed Distribution')
-            ax3.set_xlabel('Wind Speed (m/s)')
-            ax3.set_ylabel('Frequency')
-            ax3.grid(True, alpha=0.3)
-            st.pyplot(fig3)
-
-    with tab3:
-        # Statistics
-        city_stats = db.get_city_statistics(selected_city)
-        if city_stats:
-            st.subheader("📊 City Statistics")
-            cols = st.columns(4)
-            stats_to_show = [
-                ('avg_temperature', '🌡️ Avg Temp', '°C'),
-                ('max_temperature', '🔥 Max Temp', '°C'),
-                ('min_temperature', '❄️ Min Temp', '°C'),
-                ('avg_humidity', '💧 Avg Humidity', '%')
-            ]
-
-            for (stat_key, stat_label, unit), col in zip(stats_to_show, cols):
-                with col:
-                    st.metric(stat_label, f"{city_stats.get(stat_key, 0)}{unit}")
-
-        # Raw data table
-        st.subheader("📋 Raw Data")
-        display_data = historical_data[['timestamp', 'temperature', 'humidity',
-                                      'pressure', 'wind_speed', 'description']].copy()
-        display_data['timestamp'] = display_data['timestamp'].dt.strftime('%Y-%m-%d %H:%M')
-        st.dataframe(display_data, use_container_width=True)
-
-        # Download data
-        csv = historical_data.to_csv(index=False)
-        st.download_button(
-            label="📥 Download CSV",
-            data=csv,
-            file_name=f"weather_data_{selected_city}_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-
-else:
-    st.info("ℹ️ No historical data available for the selected period.")
+except Exception as e:
+    st.error(f"Error loading historical data: {e}")
+    # Debug information
+    if 'historical_data' in locals():
+        st.write("Sample timestamp values:")
+        st.write(historical_data['timestamp'].head().tolist())
 
 # Footer
 st.markdown("---")
